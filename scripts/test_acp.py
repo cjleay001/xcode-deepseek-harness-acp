@@ -33,7 +33,7 @@ proc = subprocess.Popen(
     text=True,
     encoding="utf-8",
     bufsize=1,
-    env=os.environ.copy(),
+    env={**os.environ, "DSH_XCODE_MCP": os.environ.get("DSH_XCODE_MCP", "0")},
 )
 assert proc.stdin and proc.stdout and proc.stderr
 stderr_lines: list[str] = []

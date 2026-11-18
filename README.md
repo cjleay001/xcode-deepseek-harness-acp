@@ -1,6 +1,6 @@
 # Xcode DeepSeek Harness ACP
 
-让支持自定义 ACP Agent 的 Xcode 使用 **DeepSeek Harness** 作为编码助手。支持通过 DeepSeek Harness 插件管理器一键安装，也保留命令行安装方式。
+让支持自定义 ACP Agent 的 Xcode 使用 **DeepSeek Harness** 作为编码助手。支持通过 DeepSeek Harness 插件管理器一键安装、Xcode 原生 MCP 构建运行，也保留命令行安装和 `simctl` 回退方式。
 
 仓库不包含 Xcode 或 DeepSeek Harness 本体，也不包含任何 API Key、账号信息或本地会话。
 
@@ -42,7 +42,7 @@ cd xcode-deepseek-harness-acp
 两种方式都会：
 
 - 初始化 `~/.dsh/profiles/acp`（如尚未创建）；
-- 安装启动器到 `~/Library/Developer/Xcode/CodingAssistant/Bin/`；
+- 安装启动器和 stdio 代理到 `~/Library/Developer/Xcode/CodingAssistant/Bin/`；
 - 在 Xcode 的 ACP 注册目录添加 `DeepSeek Harness`；
 - 使用 `/bin/bash` 解释器启动脚本。
 
@@ -64,7 +64,41 @@ Response: DSH_ACP_OK
 ACP smoke test passed.
 ```
 
-测试使用当前 ACP 模型，会产生一次少量模型调用。测试会话仅保存在用户本地 DSH 存储中，不写入仓库。可用 `DSH_ACP_WORKSPACE` 指定测试工作区，或用 `DSH_ACP_LAUNCHER` 指定其他启动器。
+测试使用当前 ACP 模型，会产生一次少量模型调用。测试会话仅保存在用户本地 DSH 存储中，不写入仓库。可用 `DSH_ACP_WORKSPACE` 指定测试工作区，或用 `DSH_ACP_LAUNCHER` 指定其他启动器。为避免基础测试受 Xcode 授权影响，测试脚本默认设置 `DSH_XCODE_MCP=0`；需要验证自动注入时可显式改为 `auto`。
+
+## 模拟器与 Xcode 原生 MCP
+
+默认的 `DSH_XCODE_MCP=auto` 会读取 `xcrun mcp-server status`：**只有 Xcode MCP 已启用时**，启动器中的轻量 stdio 代理才会在 `session/new` 和 `session/resume` 中注入 `xcrun mcpbridge`。工具在首轮模型调用前完成发现，避免全局异步挂载造成的“第一轮没有 Xcode 工具”问题。
+
+### 首次授权
+
+1. 在 **Xcode → Settings → Intelligence → Model Context Protocol** 中允许外部 Agent 使用 Xcode 工具。
+2. 第一次让 Agent 打开项目时，Xcode 会请求 Agent 和文件夹访问权限。请仅批准 **dsh-mcp-client / DeepSeek Harness** 与当前项目所在工作区，不要选择“允许所有 Agent”。
+3. 可用 `xcrun mcp-server status --format json` 检查状态。代理不会替你启用 MCP、执行 sudo 或修改权限。
+
+### 推荐运行顺序
+
+为避免冷构建超过单次 MCP 工具默认的 60 秒等待时间，先构建，再进入设备交互：
+
+```text
+XcodeOpenWorkspace（如需要）
+→ XcodeListRunDestinations
+→ BuildProject
+→ DeviceInteractionStartWorkspaceSession
+→ DeviceInteractionInstallAndRun
+→ GetConsoleOutput
+→ DeviceInteractionEndSession
+```
+
+不要在大项目冷构建前直接调用 `DeviceInteractionInstallAndRun`。如果它超时，先单独完成 `BuildProject`，再重试设备交互。该流程已经通过真实 Objective-C App 的构建、安装、启动及控制台读取验证。
+
+### 禁用与回退
+
+- `DSH_XCODE_MCP=0`：禁用注入，保留 `xcodebuild + simctl` 回退。
+- `DSH_XCODE_MCP=auto`：默认，按 Xcode MCP 启用状态决定。
+- `DSH_XCODE_MCP=1`：仅诊断时强制注入；MCP 未启用或不可用时，会话创建可能失败。
+
+可在 Xcode Agent 的 Environment 中修改该值。代理只转发 JSON-RPC 并在内存中修改会话的 MCP 声明，不记录提示词。
 
 ## 模型路由
 
@@ -93,6 +127,7 @@ model: deepseek-v4-flash
 
 ```text
 ~/Library/Developer/Xcode/CodingAssistant/Bin/dsh-acp-launcher.sh
+~/Library/Developer/Xcode/CodingAssistant/Bin/dsh_acp_proxy.py
 ~/Library/Developer/Xcode/CodingAssistant/ACP/D5EAC000-0000-4000-8000-000000000001.plist
 ```
 
@@ -107,8 +142,10 @@ index.js                   启用插件时执行本地安装
 icon.svg                   插件图标
 locale/                    中英文插件信息
 bin/dsh-acp-launcher.sh    ACP stdio 启动器
+bin/dsh_acp_proxy.py       按需注入 Xcode MCP 的转发代理
 scripts/install.sh         本地安装与 Xcode 注册
 scripts/test_acp.py        无第三方依赖的连接测试
+tests/test_proxy.py        代理回归测试
 LICENSE                    MIT License
 ```
 
@@ -128,13 +165,14 @@ LICENSE                    MIT License
 
 ### 模拟器不是从 Device Hub 启动的
 
-Agent 通常使用 `xcrun simctl` 自动化操作。它与 Device Hub 管理的是同一套 CoreSimulator 设备，Device Hub 刷新后也会显示运行状态。
+新版在 Xcode MCP 可用时优先使用 `BuildProject` 和 `DeviceInteractionInstallAndRun`，由 Xcode 原生设备流程完成构建和运行，不再只依赖 `simctl`。禁用 MCP 后才会使用 `xcodebuild + simctl` 回退；两种方式与 Device Hub 管理的是同一套 CoreSimulator 设备。
 
 ## 隐私与安全
 
 - 命令行安装器运行阶段不需要网络、sudo 或第三方依赖；通过 GitHub 安装插件时，DSH 需要下载仓库。
 - DSH 插件激活时会执行仓库内的 `scripts/install.sh`，只写入本文列出的 DSH ACP 和 Xcode 配置位置。
-- 脚本不会读取、收集或上传凭证。
+- 脚本不会读取、收集或上传凭证文件。
+- 代理仅在内存中转发 ACP JSON-RPC、读取 Xcode MCP 启用状态并注入会话声明，不记录提示词，也不修改授权。
 - 测试脚本只在本地通过 ACP 与 DeepSeek Harness 通信；模型请求由用户自己的配置处理。
 - 本工具不会自动操作模拟器或修改项目；这些行为只发生在你明确交给 Agent 的任务中。
 

@@ -3,10 +3,12 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_LAUNCHER="$ROOT/bin/dsh-acp-launcher.sh"
+SOURCE_PROXY="$ROOT/bin/dsh_acp_proxy.py"
 APP_ROOT="${DSH_APP_ROOT:-/Applications/DeepSeek Harness.app/Contents}"
 BIN_DIR="$HOME/Library/Developer/Xcode/CodingAssistant/Bin"
 ACP_DIR="$HOME/Library/Developer/Xcode/CodingAssistant/ACP"
 INSTALLED_LAUNCHER="$BIN_DIR/dsh-acp-launcher.sh"
+INSTALLED_PROXY="$BIN_DIR/dsh_acp_proxy.py"
 AGENT_PLIST="$ACP_DIR/D5EAC000-0000-4000-8000-000000000001.plist"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -26,13 +28,14 @@ for command_name in python3 plutil; do
     exit 1
   fi
 done
+PYTHON_BIN="$(command -v python3)"
 
 printf 'Initializing the DSH ACP profile...\n'
 "$SOURCE_LAUNCHER" --help >/dev/null
 
 mkdir -p "$BIN_DIR" "$ACP_DIR"
 
-python3 - "$SOURCE_LAUNCHER" "$INSTALLED_LAUNCHER" "$AGENT_PLIST" "$APP_ROOT" <<'PY'
+python3 - "$SOURCE_LAUNCHER" "$SOURCE_PROXY" "$INSTALLED_LAUNCHER" "$INSTALLED_PROXY" "$AGENT_PLIST" "$APP_ROOT" "$PYTHON_BIN" <<'PY'
 import os
 from pathlib import Path
 import plistlib
@@ -42,9 +45,12 @@ import tempfile
 import time
 
 source_launcher = Path(sys.argv[1])
-installed_launcher = Path(sys.argv[2])
-plist_path = Path(sys.argv[3])
-app_root = sys.argv[4]
+source_proxy = Path(sys.argv[2])
+installed_launcher = Path(sys.argv[3])
+installed_proxy = Path(sys.argv[4])
+plist_path = Path(sys.argv[5])
+app_root = sys.argv[6]
+python_bin = sys.argv[7]
 
 
 def atomic_write(path: Path, data: bytes, mode: int) -> None:
@@ -70,10 +76,15 @@ def atomic_write(path: Path, data: bytes, mode: int) -> None:
 
 
 atomic_write(installed_launcher, source_launcher.read_bytes(), 0o755)
+atomic_write(installed_proxy, source_proxy.read_bytes(), 0o755)
 payload = {
     "agent": "/bin/bash",
     "arguments": [str(installed_launcher)],
-    "environment": {"DSH_APP_ROOT": app_root},
+    "environment": {
+        "DSH_APP_ROOT": app_root,
+        "DSH_ACP_PYTHON": python_bin,
+        "DSH_XCODE_MCP": "auto",
+    },
     "name": "DeepSeek Harness",
 }
 atomic_write(plist_path, plistlib.dumps(payload, sort_keys=False), 0o644)
@@ -85,4 +96,5 @@ printf '\nInstalled DeepSeek Harness as an Xcode ACP Agent.\n'
 printf '1. Restart Xcode.\n'
 printf '2. Open Settings > Intelligence and select DeepSeek Harness.\n'
 printf '3. Run: python3 %s/scripts/test_acp.py\n' "$ROOT"
+printf 'For native simulator runs, enable Xcode MCP and approve only this agent and your workspace when prompted.\n'
 printf 'If the model has no credentials, configure the ACP provider/model as described in README.md.\n'
