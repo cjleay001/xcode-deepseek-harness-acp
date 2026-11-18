@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Xcode ACP integration",
+    "description": "Register DeepSeek Harness as an Xcode ACP Agent. Install and enable the bundle, then restart Xcode and choose DeepSeek Harness under Settings > Intelligence. Activation initializes ~/.dsh/profiles/acp and writes the launcher and registration under ~/Library/Developer/Xcode/CodingAssistant. Existing different files are backed up before replacement. Model credentials are not read or changed, and Xcode is never restarted automatically. Disabling or removing this bundle does not remove the external Xcode registration, so the Agent can remain usable in Xcode."
+  }
+}
