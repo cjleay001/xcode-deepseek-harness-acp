@@ -26,6 +26,7 @@ class McpStdioClient:
         self.next_id = 0
         self.pending = bytearray()
         self.stderr_lines: list[str] = []
+        self.session_secrets: set[str] = set()
         self.proc = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -73,7 +74,9 @@ class McpStdioClient:
             message = self._next_message(deadline)
             if message.get("id") == request_id and ("result" in message or "error" in message):
                 if "error" in message:
-                    raise RuntimeError(f"{method} failed: {message['error']}")
+                    self.session_secrets.update(collect_session_secrets(message["error"]))
+                    raise RuntimeError(f"{method} failed: {redact(message['error'], self.session_secrets)}")
+                self.session_secrets.update(collect_session_secrets(message["result"]))
                 return message["result"]
             if "method" in message and "id" in message:
                 self._send({
@@ -136,30 +139,45 @@ def print_json(value: Any) -> None:
 SENSITIVE_SESSION_KEYS = {"interactionSessionKey", "interactSessionKey"}
 
 
-def redact_text(text: str) -> str:
-    """Redact session secrets in nested or escaped JSON text."""
-    text = re.sub(
+def collect_session_secrets(value: Any) -> set[str]:
+    secrets: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in SENSITIVE_SESSION_KEYS and isinstance(item, str) and item:
+                secrets.add(item)
+            else:
+                secrets.update(collect_session_secrets(item))
+    elif isinstance(value, list):
+        for item in value:
+            secrets.update(collect_session_secrets(item))
+    return secrets
+
+
+def redact_text(text: str, secrets: set[str] | tuple[str, ...] = ()) -> str:
+    """Redact named fields and previously observed session values in any text."""
+    for secret in sorted(secrets, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    patterns = [
         r'(?i)("(?:interactionSessionKey|interactSessionKey)"\s*:\s*")[^"]*(")',
-        r'\1[redacted]\2',
-        text,
-    )
-    return re.sub(
         r'(?i)(\\"(?:interactionSessionKey|interactSessionKey)\\"\s*:\s*\\")[^"]*(\\")',
-        r'\1[redacted]\2',
-        text,
-    )
+        r"(?i)('(?:interactionSessionKey|interactSessionKey)'\s*:\s*')[^']*(')",
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, r'\1[redacted]\2', text)
+    return text
 
 
-def redact(value: Any) -> Any:
+def redact(value: Any, secrets: set[str] | tuple[str, ...] = ()) -> Any:
     if isinstance(value, dict):
         return {
-            key: "[redacted]" if key in SENSITIVE_SESSION_KEYS else redact(item)
+            key: "[redacted]" if key in SENSITIVE_SESSION_KEYS else redact(item, secrets)
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [redact(item) for item in value]
+        return [redact(item, secrets) for item in value]
     if isinstance(value, str):
-        return redact_text(value)
+        return redact_text(value, secrets)
     return value
 
 
@@ -167,9 +185,9 @@ def result_text(result: dict[str, Any]) -> str:
     return "\n".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
 
 
-def require_success(result: dict[str, Any], action: str) -> dict[str, Any]:
+def require_success(result: dict[str, Any], action: str, secrets: set[str] | tuple[str, ...] = ()) -> dict[str, Any]:
     if result.get("isError"):
-        raise RuntimeError(f"{action} failed: {redact_text(result_text(result))}")
+        raise RuntimeError(f"{action} failed: {redact_text(result_text(result), secrets)}")
     return result
 
 
@@ -192,6 +210,7 @@ def resolve_workspace(client: McpStdioClient, value: str, timeout: float) -> str
     result = require_success(
         client.request("tools/call", {"name": "XcodeOpenWorkspace", "arguments": {"path": value}}, timeout),
         "XcodeOpenWorkspace",
+        client.session_secrets,
     )
     identifier = structured(result).get("workspaceIdentifier")
     if not identifier:
@@ -227,10 +246,11 @@ def device_state(client: McpStdioClient, options: argparse.Namespace) -> dict[st
                 options.timeout,
             ),
             "BuildProject",
+            client.session_secrets,
         )
         built = True
     try:
-        started = structured(require_success(client.request("tools/call", {"name": start_name, "arguments": start_arguments}, options.timeout), start_name))
+        started = structured(require_success(client.request("tools/call", {"name": start_name, "arguments": start_arguments}, options.timeout), start_name, client.session_secrets))
         session_key = started.get("interactionSessionKey")
         if not session_key:
             raise RuntimeError(f"{start_name} returned no interactionSessionKey")
@@ -242,6 +262,7 @@ def device_state(client: McpStdioClient, options: argparse.Namespace) -> dict[st
                     options.timeout,
                 ),
                 "DeviceInteractionInstallAndRun",
+                client.session_secrets,
             )
             installed_and_running = True
         interaction: dict[str, Any] = {"interactSessionKey": session_key}
@@ -252,6 +273,7 @@ def device_state(client: McpStdioClient, options: argparse.Namespace) -> dict[st
         captured = require_success(
             client.request("tools/call", {"name": "DeviceInteractionSynthesize", "arguments": interaction}, options.timeout),
             "DeviceInteractionSynthesize",
+            client.session_secrets,
         )
         return {
             "device": {
@@ -269,7 +291,7 @@ def device_state(client: McpStdioClient, options: argparse.Namespace) -> dict[st
                 {"name": "DeviceInteractionEndSession", "arguments": {"interactionSessionKey": session_key}},
                 min(options.timeout, 60),
             )
-            require_success(ended, "DeviceInteractionEndSession")
+            require_success(ended, "DeviceInteractionEndSession", client.session_secrets)
 
 
 def main() -> int:
@@ -303,7 +325,7 @@ def main() -> int:
         if options.action == "device-state":
             if options.workspace:
                 options.workspace = resolve_workspace(client, options.workspace, options.timeout)
-            print_json(redact(device_state(client, options)))
+            print_json(redact(device_state(client, options), client.session_secrets))
             return 0
         if options.action == "list":
             if options.json:
@@ -326,12 +348,13 @@ def main() -> int:
         if options.workspace and "workspaceIdentifier" in schema_properties:
             arguments.setdefault("workspaceIdentifier", resolve_workspace(client, options.workspace, options.timeout))
         result = client.request("tools/call", {"name": options.name, "arguments": arguments}, options.timeout)
-        print_json(redact(result))
+        print_json(redact(result, client.session_secrets))
         return 2 if result.get("isError") else 0
     except Exception as exc:
-        print(redact_text(f"Xcode MCP error: {type(exc).__name__}: {exc}"), file=sys.stderr)
+        secrets = client.session_secrets if client else set()
+        print(redact_text(f"Xcode MCP error: {type(exc).__name__}: {exc}", secrets), file=sys.stderr)
         if client and client.stderr_lines:
-            print(redact_text("MCP stderr (last 10 lines):\n" + "\n".join(client.stderr_lines[-10:])), file=sys.stderr)
+            print(redact_text("MCP stderr (last 10 lines):\n" + "\n".join(client.stderr_lines[-10:]), secrets), file=sys.stderr)
         return 1
     finally:
         if client:

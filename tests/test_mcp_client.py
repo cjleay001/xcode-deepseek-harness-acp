@@ -25,7 +25,7 @@ def run(*args: str) -> subprocess.CompletedProcess:
 
 listed = run("list")
 assert listed.returncode == 0, listed.stderr
-assert listed.stdout.splitlines() == ["Echo", "Fail", "DeviceInteractionStartSession", "DeviceInteractionSynthesize", "DeviceInteractionEndSession", "XcodeOpenWorkspace", "BuildProject", "DeviceInteractionStartWorkspaceSession", "DeviceInteractionInstallAndRun"]
+assert listed.stdout.splitlines() == ["Echo", "Fail", "DeviceInteractionStartSession", "DeviceInteractionSynthesize", "DeviceInteractionEndSession", "XcodeOpenWorkspace", "BuildProject", "DeviceInteractionStartWorkspaceSession", "DeviceInteractionInstallAndRun", "SecretRpcError"]
 
 schema = run("schema", "Echo")
 assert schema.returncode == 0, schema.stderr
@@ -62,4 +62,9 @@ failed_secret = run("device-state", "--device", "fake-device", "--interaction-co
 assert failed_secret.returncode == 1
 assert "secret-session" not in failed_secret.stderr
 assert "[redacted]" in failed_secret.stderr
+
+rpc_error = run("call", "SecretRpcError")
+assert rpc_error.returncode == 1
+assert "secret-session" not in rpc_error.stderr
+assert "[redacted]" in rpc_error.stderr
 print("Generic MCP tools, device workflow and redaction tests: OK")

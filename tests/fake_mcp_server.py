@@ -14,6 +14,7 @@ TOOLS = [
     {"name": "BuildProject", "description": "Build", "inputSchema": {"type": "object", "properties": {"workspaceIdentifier": {"type": "string"}}}},
     {"name": "DeviceInteractionStartWorkspaceSession", "description": "Start workspace session", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "DeviceInteractionInstallAndRun", "description": "Install and run", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "SecretRpcError", "description": "Return a secret JSON-RPC error", "inputSchema": {"type": "object", "properties": {}}},
 ]
 
 
@@ -43,6 +44,11 @@ for raw_line in sys.stdin.buffer:
         if arguments.get("workspaceIdentifier"):
             text += ":" + arguments["workspaceIdentifier"]
         result = {"content": [{"type": "text", "text": text}]}
+    elif method == "tools/call" and request["params"]["name"] == "SecretRpcError":
+        sys.stderr.write("secret-session\n")
+        sys.stderr.flush()
+        send({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": "secret error", "data": {"interactionSessionKey": "secret-session"}}})
+        continue
     elif method == "tools/call" and request["params"]["name"] == "DeviceInteractionStartSession":
         result = {"structuredContent": {"interactionSessionKey": "secret-session", "deviceUUID": "fake-device", "deviceIsSimulator": True}}
     elif method == "tools/call" and request["params"]["name"] == "DeviceInteractionSynthesize":

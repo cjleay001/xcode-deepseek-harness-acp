@@ -68,9 +68,9 @@ def process_running(pid: int) -> bool:
     return True
 
 
-def sigterm_cleans_process_group() -> None:
+def assert_group_cleanup(mode: str, expected_code: int) -> None:
     process = subprocess.Popen(
-        [sys.executable, str(PROXY), "--", sys.executable, str(ROOT / "tests" / "sticky_agent.py")],
+        [sys.executable, str(PROXY), "--", sys.executable, str(ROOT / "tests" / "sticky_agent.py"), mode],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -81,13 +81,14 @@ def sigterm_cleans_process_group() -> None:
     try:
         parent_text, child_text = process.stdout.readline().strip().split(":")
         parent_pid, child_pid = int(parent_text), int(child_text)
-        process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=10) == 143
+        if mode == "parent-waits":
+            process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=10) == expected_code
         for pid in (parent_pid, child_pid):
             deadline = time.monotonic() + 2
             while process_running(pid) and time.monotonic() < deadline:
                 time.sleep(0.05)
-            assert not process_running(pid), f"Process survived SIGTERM cleanup: {pid}"
+            assert not process_running(pid), f"Process survived {mode} cleanup: {pid}"
     finally:
         if process.poll() is None:
             process.kill()
@@ -136,7 +137,8 @@ def main() -> None:
     assert disabled[0]["result"]["mcpServers"] == []
     early_server_exit()
     malformed_status_is_fail_closed()
-    sigterm_cleans_process_group()
+    assert_group_cleanup("parent-waits", 143)
+    assert_group_cleanup("leader-exits", 0)
     print("Proxy injection, resume, passthrough, opt-out, early-exit, status and signal tests: OK")
 
 

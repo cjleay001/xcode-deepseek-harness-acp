@@ -164,13 +164,16 @@ def main() -> int:
     try:
         return_code = proc.wait()
     finally:
-        if proc.poll() is None:
-            signal_agent_group(signal.SIGTERM)
-            try:
+        # Always close the whole private group, even if its leader already exited.
+        signal_agent_group(signal.SIGTERM)
+        try:
+            if proc.poll() is None:
                 proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                signal_agent_group(signal.SIGKILL)
-                proc.wait()
+        except subprocess.TimeoutExpired:
+            pass
+        signal_agent_group(signal.SIGKILL)
+        if proc.poll() is None:
+            proc.wait()
         client_thread.join(timeout=2)
         server_thread.join(timeout=5)
     return return_code
