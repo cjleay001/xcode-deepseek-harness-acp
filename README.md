@@ -18,7 +18,7 @@ xcode_mcp_server.py（deferred MCP 适配器）
 /usr/bin/xcrun mcpbridge → Xcode / Simulator
 ```
 
-工具发现仍在本地完成，但模型默认只看到较小的核心工具集。需要模拟器、测试、LLDB、文档或诊断工具时，通过 `xcode_tool_search` 获取对应工具的完整 schema，并在当前会话中继续保留，避免反复更换工具导致缓存抖动。
+工具发现仍在本地完成，但模型默认只看到较小的核心工具集。需要模拟器、测试、LLDB、文档或诊断工具时，通过 `xcode_tool_search` 获取对应工具的完整 schema，并在当前会话中继续保留，避免反复更换工具导致缓存抖动。`initialize` 按支持版本集合协商，未知版本回退到服务端支持版本；未挂载的工具不能直接调用。
 
 ## 环境要求
 

@@ -12,10 +12,10 @@ import sys
 from typing import Any
 
 try:
-    from mcp_stdio import McpStdioClient
+    from mcp_stdio import McpStdioClient, SUPPORTED_PROTOCOL_VERSIONS
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
-    from mcp_stdio import McpStdioClient
+    from mcp_stdio import McpStdioClient, SUPPORTED_PROTOCOL_VERSIONS
 
 BASE_TOOLS = [
     "XcodeOpenWorkspace",
@@ -74,6 +74,7 @@ SEARCH_DEFINITION = {
     },
 }
 SENSITIVE_KEYS = {"interactionSessionKey", "interactSessionKey"}
+FALLBACK_PROTOCOL_VERSION = "2025-11-25"
 
 
 def collect_secrets(value: Any) -> set[str]:
@@ -122,22 +123,39 @@ def expanded_query(query: str) -> str:
     return expanded
 
 
+STOP_WORDS = {
+    "and", "or", "the", "a", "an", "to", "of", "in", "on", "for", "with", "by",
+    "is", "are", "be", "can", "use", "using", "this", "that", "task",
+}
+
+
+def meaningful_tokens(text: str) -> list[str]:
+    return [
+        token for token in re.findall(r"[a-z0-9_\u4e00-\u9fff]+", text.lower())
+        if len(token) > 1 and token not in STOP_WORDS
+    ]
+
+
 def score_tool(definition: dict[str, Any], query: str) -> int:
-    name = definition["name"].lower()
+    raw_name = definition["name"]
+    name = raw_name.lower()
     description = str(definition.get("description", "")).lower()
-    normalized = expanded_query(query)
-    phrase = normalized.strip()
+    name_tokens = {
+        token.lower() for token in re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z]|$)|\d+", raw_name)
+    }
+    terms = meaningful_tokens(expanded_query(query))
+    if not terms:
+        return 0
+    phrase = " ".join(terms)
     score = 0
     if len(phrase) > 2 and phrase in name:
         score += 14
     if len(phrase) > 2 and phrase in description:
         score += 5
-    for token in re.split(r"[^a-z0-9_\u4e00-\u9fff]+", phrase):
-        if len(token) <= 1:
-            continue
-        if token in name:
+    for token in terms:
+        if token in name_tokens:
             score += 5
-        elif token in description:
+        elif re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", description):
             score += 2
     return score
 
@@ -147,28 +165,39 @@ def rank_tools(catalog: dict[str, dict[str, Any]], query: str, limit: int = 6) -
         return []
     allow_high_risk = has_high_risk_intent(query)
     capped_limit = max(1, min(8, limit if isinstance(limit, int) else 6))
-    candidates = []
+    deferred = []
+    core = []
     for definition in catalog.values():
         if not allow_high_risk and definition["name"].startswith(HIGH_RISK_PREFIXES):
             continue
         score = score_tool(definition, query)
-        if score > 0:
-            candidates.append((score, definition))
-    candidates.sort(key=lambda item: (-item[0], item[1]["name"]))
-    return [definition for _, definition in candidates[:capped_limit]]
+        if score <= 0:
+            continue
+        entry = (score, definition)
+        if definition["name"] in BASE_TOOLS:
+            core.append(entry)
+        else:
+            deferred.append(entry)
+    deferred.sort(key=lambda item: (-item[0], item[1]["name"]))
+    core.sort(key=lambda item: (-item[0], item[1]["name"]))
+    return [definition for _, definition in (deferred + core)[:capped_limit]]
 
 
 class DeferredXcodeServer:
     def __init__(self) -> None:
         upstream_command = shlex.split(os.environ.get("XCODE_MCP_UPSTREAM", "/usr/bin/xcrun mcpbridge"))
         self.upstream = McpStdioClient(upstream_command, 20)
-        self.upstream.initialize()
-        definitions = self.upstream.list_tools()
-        self.catalog = {definition["name"]: definition for definition in definitions}
-        if not REQUIRED_TOOLS.issubset(self.catalog):
-            raise RuntimeError("Xcode MCP did not provide the required core tools")
-        self.allowed = set(BASE_TOOLS)
-        self.next_id = 0
+        try:
+            self.upstream.initialize()
+            definitions = self.upstream.list_tools()
+            self.catalog = {definition["name"]: definition for definition in definitions}
+            if not REQUIRED_TOOLS.issubset(self.catalog):
+                raise RuntimeError("Xcode MCP did not provide the required core tools")
+            self.allowed = set(BASE_TOOLS)
+            self.next_id = 0
+        except Exception:
+            self.upstream.close()
+            raise
 
     def send(self, message: dict[str, Any]) -> None:
         payload = json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
@@ -207,7 +236,8 @@ class DeferredXcodeServer:
             return
         request_id = message.get("id")
         if method == "initialize":
-            protocol_version = message.get("params", {}).get("protocolVersion", "2025-06-18")
+            requested_version = message.get("params", {}).get("protocolVersion")
+            protocol_version = requested_version if requested_version in SUPPORTED_PROTOCOL_VERSIONS else FALLBACK_PROTOCOL_VERSION
             self.send({
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -226,6 +256,8 @@ class DeferredXcodeServer:
             name = params.get("name")
             arguments = params.get("arguments", {})
             try:
+                if name != "xcode_tool_search" and name not in self.allowed:
+                    raise RuntimeError(f"Tool is not enabled yet: {name}. Call xcode_tool_search first.")
                 if name == "xcode_tool_search":
                     result = self.search(arguments)
                 else:
@@ -259,9 +291,13 @@ class DeferredXcodeServer:
 
 
 def main() -> int:
-    server = DeferredXcodeServer()
-    server.run()
-    return 0
+    try:
+        server = DeferredXcodeServer()
+        server.run()
+        return 0
+    except Exception as exc:
+        print(f"Xcode MCP adapter failed: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 SENSITIVE_SESSION_KEYS = {"interactionSessionKey", "interactSessionKey"}
+SUPPORTED_PROTOCOL_VERSIONS = {"2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"}
 
 
 def collect_session_secrets(value: Any) -> set[str]:
@@ -132,6 +133,9 @@ class McpStdioClient:
             "capabilities": {},
             "clientInfo": {"name": "xcode-dsh-mcp-cli", "version": "1.0.0"},
         }, self.startup_timeout)
+        protocol_version = result.get("protocolVersion")
+        if protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
+            raise RuntimeError(f"Unsupported MCP protocol version: {protocol_version!r}")
         self.notify("notifications/initialized")
         return result
 
