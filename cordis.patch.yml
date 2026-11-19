@@ -1,3 +1,15 @@
 - insert:
     - id: xcode-deepseek-harness-acp
       name: 'xcode-deepseek-harness-acp'
+
+    - id: xcode-mcp-client
+      name: '@deepseek-ai/dsh-mcp-client'
+      disabled: !!js /^(0|false|no|off)$/i.test(process.env.DSH_XCODE_MCP || '')
+      config:
+        serverName: xcode
+        transport: stdio
+        command: /usr/bin/xcrun
+        args: ['mcpbridge']
+        startupTimeoutMs: 15000
+        toolCallTimeoutMs: 300000
+        failOnStartupError: false

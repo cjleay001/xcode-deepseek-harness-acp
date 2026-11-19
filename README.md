@@ -66,6 +66,29 @@ ACP smoke test passed.
 
 测试使用当前 ACP 模型，会产生一次少量模型调用。测试会话仅保存在用户本地 DSH 存储中，不写入仓库。可用 `DSH_ACP_WORKSPACE` 指定测试工作区，或用 `DSH_ACP_LAUNCHER` 指定其他启动器。为避免基础测试受 Xcode 授权影响，测试脚本默认设置 `DSH_XCODE_MCP=0`；需要验证自动注入时可显式改为 `auto`。
 
+## 全部 Xcode MCP 能力
+
+当前在 Xcode 27.1 上接入 **54 个工具**，覆盖项目文件、Target/Scheme、构建运行、测试、LLDB、模拟器 UI、SwiftUI Preview、Apple 文档、本地化、崩溃和性能诊断。DSH 插件会话也可直接使用 `mcp__xcode__*` 工具；新会话生效。
+
+完整目录、参数及前置条件见 **[Xcode MCP 完整能力与调用方法](docs/XCODE_MCP.md)**。
+
+```bash
+# 动态列出当前版本支持的全部工具，不限于本文示例
+python3 scripts/xcode_mcp.py list
+python3 scripts/xcode_mcp.py schema DeviceInteractionSynthesize
+
+# 任意工具调用；项目绝对路径会自动解析为 workspace identifier
+python3 scripts/xcode_mcp.py call XcodeListSchemes \
+  --workspace /absolute/path/App.xcodeproj
+
+# 构建、安装运行、UI 捕获并自动清理设备会话
+python3 scripts/xcode_mcp.py device-state \
+  --workspace /absolute/path/App.xcodeproj \
+  --bundle-id com.example.App --run
+```
+
+Codex 中额外的 `npx xcodebuildmcp` 是另一套 MCP 服务，不是 `xcrun mcpbridge`，本工具默认不下载或依赖它。
+
 ## 模拟器与 Xcode 原生 MCP
 
 默认的 `DSH_XCODE_MCP=auto` 会读取 `xcrun mcp-server status`：**只有 Xcode MCP 已启用时**，启动器中的轻量 stdio 代理才会在 `session/new` 和 `session/resume` 中注入 `xcrun mcpbridge`。工具在首轮模型调用前完成发现，避免全局异步挂载造成的“第一轮没有 Xcode 工具”问题。
@@ -145,7 +168,9 @@ bin/dsh-acp-launcher.sh    ACP stdio 启动器
 bin/dsh_acp_proxy.py       按需注入 Xcode MCP 的转发代理
 scripts/install.sh         本地安装与 Xcode 注册
 scripts/test_acp.py        无第三方依赖的连接测试
-tests/test_proxy.py        代理回归测试
+scripts/xcode_mcp.py       任意 Xcode MCP 工具发现、调用与设备工作流
+docs/XCODE_MCP.md          54 项能力目录、参数和前置条件
+tests/                     ACP、代理、MCP 客户端与文档回归测试
 LICENSE                    MIT License
 ```
 
@@ -174,7 +199,8 @@ LICENSE                    MIT License
 - 脚本不会读取、收集或上传凭证文件。
 - 代理仅在内存中转发 ACP JSON-RPC、读取 Xcode MCP 启用状态并注入会话声明，不记录提示词，也不修改授权。
 - 测试脚本只在本地通过 ACP 与 DeepSeek Harness 通信；模型请求由用户自己的配置处理。
-- 本工具不会自动操作模拟器或修改项目；这些行为只发生在你明确交给 Agent 的任务中。
+- `xcode_mcp.py` 通过本地 `xcrun mcpbridge` 调用 Xcode；文档搜索、崩溃和性能工具可能按用户请求访问 Apple 服务。
+- 本工具不会自动操作模拟器或修改项目；这些行为只发生在你明确交给 Agent 的任务或显式执行的命令中。
 
 ## License
 

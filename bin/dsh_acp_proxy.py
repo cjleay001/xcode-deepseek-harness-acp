@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import subprocess
 import sys
 import threading
@@ -38,7 +39,10 @@ def xcode_mcp_enabled() -> bool:
         if result.returncode != 0:
             return False
         status = json.loads(result.stdout)
-        return status.get("permission", {}).get("enabled") is True
+        if not isinstance(status, dict):
+            return False
+        permission = status.get("permission")
+        return isinstance(permission, dict) and permission.get("enabled") is True
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
 
@@ -56,7 +60,7 @@ def inject_if_needed(line: bytes, enabled: bool) -> bytes:
     params = message.get("params")
     if not isinstance(params, dict):
         return line
-    servers = params.get("mcpServers")
+    servers = params.get("mcpServers", [])
     if not isinstance(servers, list):
         return line
     if any(isinstance(server, dict) and server.get("name") == "xcode" for server in servers):
@@ -66,10 +70,29 @@ def inject_if_needed(line: bytes, enabled: bool) -> bytes:
 
 
 def forward_client_to_server(enabled: bool) -> None:
+    """Use unbuffered reads so early server exit cannot strand a stdin lock."""
     global proc
+    pending = bytearray()
+    descriptor = sys.stdin.fileno()
     try:
-        for line in sys.stdin.buffer:
-            proc.stdin.write(inject_if_needed(line, enabled))
+        while proc.poll() is None:
+            readable, _, _ = select.select([descriptor], [], [], 0.1)
+            if not readable:
+                continue
+            chunk = os.read(descriptor, 65_536)
+            if not chunk:
+                break
+            pending.extend(chunk)
+            while True:
+                newline = pending.find(b"\n")
+                if newline < 0:
+                    break
+                line = bytes(pending[: newline + 1])
+                del pending[: newline + 1]
+                proc.stdin.write(inject_if_needed(line, enabled))
+                proc.stdin.flush()
+        if pending and proc.poll() is None:
+            proc.stdin.write(inject_if_needed(bytes(pending), enabled))
             proc.stdin.flush()
     except (BrokenPipeError, OSError):
         pass
@@ -128,6 +151,7 @@ def main() -> int:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        client_thread.join(timeout=2)
         server_thread.join(timeout=5)
     return return_code
 

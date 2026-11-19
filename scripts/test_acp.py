@@ -30,9 +30,7 @@ proc = subprocess.Popen(
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
-    text=True,
-    encoding="utf-8",
-    bufsize=1,
+    bufsize=0,
     env={**os.environ, "DSH_XCODE_MCP": os.environ.get("DSH_XCODE_MCP", "0")},
 )
 assert proc.stdin and proc.stdout and proc.stderr
@@ -41,18 +39,20 @@ received_text: list[str] = []
 selector = selectors.DefaultSelector()
 selector.register(proc.stdout, selectors.EVENT_READ)
 next_id = 0
+pending_stdout = bytearray()
 
 
 def collect_stderr() -> None:
     for line in proc.stderr:
-        stderr_lines.append(line.rstrip())
+        stderr_lines.append(line.decode("utf-8", "replace").rstrip())
 
 
 threading.Thread(target=collect_stderr, daemon=True).start()
 
 
 def send(message: dict) -> None:
-    proc.stdin.write(json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n")
+    payload = json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
+    proc.stdin.write(payload.encode("utf-8"))
     proc.stdin.flush()
 
 
@@ -89,6 +89,24 @@ def handle_client_request(message: dict) -> None:
     })
 
 
+def next_message(deadline: float) -> dict:
+    """Read raw frames so buffered responses never become invisible to select."""
+    global pending_stdout
+    while True:
+        newline = pending_stdout.find(b"\n")
+        if newline >= 0:
+            line = bytes(pending_stdout[: newline + 1])
+            del pending_stdout[: newline + 1]
+            return json.loads(line)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not selector.select(remaining):
+            raise TimeoutError("Timed out waiting for the ACP response")
+        chunk = os.read(proc.stdout.fileno(), 65_536)
+        if not chunk:
+            raise RuntimeError("ACP process exited while waiting for a response")
+        pending_stdout.extend(chunk)
+
+
 def call(method: str, params: dict, timeout: float = 45) -> dict:
     global next_id
     next_id += 1
@@ -96,13 +114,7 @@ def call(method: str, params: dict, timeout: float = 45) -> dict:
     send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
     deadline = time.monotonic() + timeout
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0 or not selector.select(remaining):
-            raise TimeoutError(f"Timed out waiting for {method}")
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError(f"ACP process exited while waiting for {method}")
-        message = json.loads(line)
+        message = next_message(deadline)
         if message.get("id") == request_id and ("result" in message or "error" in message):
             if "error" in message:
                 raise RuntimeError(f"{method} failed: {message['error']}")
