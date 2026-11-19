@@ -7,8 +7,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from unittest import mock
 
@@ -58,6 +60,46 @@ def early_server_exit() -> None:
     assert stdout == "help\n"
 
 
+def process_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def sigterm_cleans_process_group() -> None:
+    process = subprocess.Popen(
+        [sys.executable, str(PROXY), "--", sys.executable, str(ROOT / "tests" / "sticky_agent.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "DSH_XCODE_MCP": "0"},
+    )
+    parent_pid = child_pid = None
+    try:
+        parent_text, child_text = process.stdout.readline().strip().split(":")
+        parent_pid, child_pid = int(parent_text), int(child_text)
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=10) == 143
+        for pid in (parent_pid, child_pid):
+            deadline = time.monotonic() + 2
+            while process_running(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not process_running(pid), f"Process survived SIGTERM cleanup: {pid}"
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        if parent_pid:
+            try:
+                os.killpg(parent_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.stdin.close()
+
+
 def malformed_status_is_fail_closed() -> None:
     spec = importlib.util.spec_from_file_location("dsh_acp_proxy", PROXY)
     module = importlib.util.module_from_spec(spec)
@@ -94,7 +136,8 @@ def main() -> None:
     assert disabled[0]["result"]["mcpServers"] == []
     early_server_exit()
     malformed_status_is_fail_closed()
-    print("Proxy injection, resume, passthrough, opt-out, early-exit and status tests: OK")
+    sigterm_cleans_process_group()
+    print("Proxy injection, resume, passthrough, opt-out, early-exit, status and signal tests: OK")
 
 
 if __name__ == "__main__":

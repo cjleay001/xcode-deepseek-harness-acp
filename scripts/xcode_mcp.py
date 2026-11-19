@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import selectors
 import shlex
 import subprocess
@@ -132,13 +133,43 @@ def print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
 
+SENSITIVE_SESSION_KEYS = {"interactionSessionKey", "interactSessionKey"}
+
+
+def redact_text(text: str) -> str:
+    """Redact session secrets in nested or escaped JSON text."""
+    text = re.sub(
+        r'(?i)("(?:interactionSessionKey|interactSessionKey)"\s*:\s*")[^"]*(")',
+        r'\1[redacted]\2',
+        text,
+    )
+    return re.sub(
+        r'(?i)(\\"(?:interactionSessionKey|interactSessionKey)\\"\s*:\s*\\")[^"]*(\\")',
+        r'\1[redacted]\2',
+        text,
+    )
+
+
+def redact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: "[redacted]" if key in SENSITIVE_SESSION_KEYS else redact(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
 def result_text(result: dict[str, Any]) -> str:
     return "\n".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
 
 
 def require_success(result: dict[str, Any], action: str) -> dict[str, Any]:
     if result.get("isError"):
-        raise RuntimeError(f"{action} failed: {result_text(result)}")
+        raise RuntimeError(f"{action} failed: {redact_text(result_text(result))}")
     return result
 
 
@@ -272,7 +303,7 @@ def main() -> int:
         if options.action == "device-state":
             if options.workspace:
                 options.workspace = resolve_workspace(client, options.workspace, options.timeout)
-            print_json(device_state(client, options))
+            print_json(redact(device_state(client, options)))
             return 0
         if options.action == "list":
             if options.json:
@@ -295,12 +326,12 @@ def main() -> int:
         if options.workspace and "workspaceIdentifier" in schema_properties:
             arguments.setdefault("workspaceIdentifier", resolve_workspace(client, options.workspace, options.timeout))
         result = client.request("tools/call", {"name": options.name, "arguments": arguments}, options.timeout)
-        print_json(result)
+        print_json(redact(result))
         return 2 if result.get("isError") else 0
     except Exception as exc:
-        print(f"Xcode MCP error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(redact_text(f"Xcode MCP error: {type(exc).__name__}: {exc}"), file=sys.stderr)
         if client and client.stderr_lines:
-            print("MCP stderr (last 10 lines):\n" + "\n".join(client.stderr_lines[-10:]), file=sys.stderr)
+            print(redact_text("MCP stderr (last 10 lines):\n" + "\n".join(client.stderr_lines[-10:])), file=sys.stderr)
         return 1
     finally:
         if client:

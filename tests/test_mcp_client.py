@@ -39,6 +39,11 @@ failed = run("call", "Fail")
 assert failed.returncode == 2, failed.stdout + failed.stderr
 assert json.loads(failed.stdout)["isError"] is True
 
+started = run("call", "DeviceInteractionStartSession", "--args", '{"deviceIdentifier":"fake-device","sessionIdentifier":"Secret Test"}')
+assert started.returncode == 0, started.stderr
+assert "secret-session" not in started.stdout
+assert "[redacted]" in started.stdout
+
 state = run("device-state", "--device", "fake-device", "--bundle-id", "com.example.app")
 assert state.returncode == 0, state.stderr
 assert "secret-session" not in state.stdout
@@ -52,4 +57,9 @@ assert running.returncode == 0, running.stderr
 running_capture = json.loads(running.stdout)
 assert running_capture["built"] is True and running_capture["installedAndRunning"] is True
 assert "secret-session" not in running.stdout
-print("Generic MCP list, schema, call, workspace, device capture and run tests: OK")
+
+failed_secret = run("device-state", "--device", "fake-device", "--interaction-command", "fail")
+assert failed_secret.returncode == 1
+assert "secret-session" not in failed_secret.stderr
+assert "[redacted]" in failed_secret.stderr
+print("Generic MCP tools, device workflow and redaction tests: OK")

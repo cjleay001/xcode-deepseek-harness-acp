@@ -47,7 +47,10 @@ for raw_line in sys.stdin.buffer:
         result = {"structuredContent": {"interactionSessionKey": "secret-session", "deviceUUID": "fake-device", "deviceIsSimulator": True}}
     elif method == "tools/call" and request["params"]["name"] == "DeviceInteractionSynthesize":
         assert request["params"]["arguments"]["interactSessionKey"] == "secret-session"
-        result = {"structuredContent": {"applicationState": "Running", "screenshotPath": "/tmp/fake.png", "hierarchyPath": "/tmp/fake.xml"}}
+        if request["params"]["arguments"].get("interactionCommand") == "fail":
+            result = {"isError": True, "content": [{"type": "text", "text": '{"interactionSessionKey":"secret-session"}'}]}
+        else:
+            result = {"structuredContent": {"applicationState": "Running", "screenshotPath": "/tmp/fake.png", "hierarchyPath": "/tmp/fake.xml"}}
     elif method == "tools/call" and request["params"]["name"] == "DeviceInteractionEndSession":
         assert request["params"]["arguments"]["interactionSessionKey"] == "secret-session"
         result = {"content": [{"type": "text", "text": "ended"}]}

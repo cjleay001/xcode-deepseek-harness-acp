@@ -38,7 +38,7 @@ python3 scripts/xcode_mcp.py device-state \
 
 - `call` 的 `--workspace` 只在工具 schema 支持 `workspaceIdentifier` 时注入。
 - 项目绝对路径会先通过 `XcodeOpenWorkspace` 解析为当前 `workspace-*` 标识，兼容 headless 调用。
-- `device-state` 使用唯一会话名，不输出会话密钥，并在 `finally` 中调用 `DeviceInteractionEndSession`。
+- `call` 与 `device-state` 会在结果和错误中对 `interactionSessionKey` / `interactSessionKey` 脱敏；`device-state` 使用唯一会话名，并在 `finally` 中调用 `DeviceInteractionEndSession`。
 - `device-state` 不加 `--run` 时只捕获当前状态；`NotRun` 是合法结果，不代表桥接失败。
 - `--interaction-command` 可执行点击、滑动、输入等操作；坐标应依据最新 UI 层级，不要只凭截图猜测。
 - 普通工具错误以 JSON 输出并返回退出码 `2`；协议、参数或启动错误返回 `1`。
@@ -150,5 +150,6 @@ python3 scripts/xcode_mcp.py device-state \
 - 首次使用只授权 `dsh-mcp-client / DeepSeek Harness` 与必要工作区。
 - `XcodeWrite`、`XcodeUpdate`、`XcodeMV`、`XcodeRM`、`XcodeNewProject`、`XcodeNewTarget` 及配置修改工具会改变项目；调用前应明确目标并备份。
 - 崩溃、性能和文档工具可能访问 Apple 服务；只发送完成任务所需的查询和标识。
-- `device-state` 不记录提示词，不在结果中暴露设备会话密钥。
+- 通用调用和设备工作流不记录提示词，并对输出及错误中的设备会话密钥脱敏。
+- ACP 代理处理 SIGTERM、SIGHUP、SIGINT，终止并回收自己创建的独立进程组，不触碰 XcodeService 或其他用户进程。
 - 禁用 ACP 注入：设置 `DSH_XCODE_MCP=0`。禁用 DSH 插件会话工具：在插件设置中关闭 **Xcode ACP 集成**，或在启动 DSH 前设置 `DSH_XCODE_MCP=0`。

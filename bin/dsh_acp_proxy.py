@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import select
+import signal
 import subprocess
 import sys
 import threading
@@ -113,6 +114,20 @@ def forward_server_to_client() -> None:
         pass
 
 
+def signal_agent_group(signum: int) -> None:
+    """Signal the agent's private process group without touching XcodeService."""
+    global proc
+    try:
+        os.killpg(proc.pid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def handle_exit_signal(signum: int, _frame: object) -> None:
+    """Raise so the normal finally path can terminate and reap the process group."""
+    raise SystemExit(128 + signum)
+
+
 def main() -> int:
     global proc
     if "--" not in sys.argv:
@@ -133,10 +148,14 @@ def main() -> int:
             stderr=None,
             bufsize=0,
             env=os.environ.copy(),
+            start_new_session=True,
         )
     except OSError as exc:
         print(f"Unable to start ACP agent: {exc}", file=sys.stderr)
         return 1
+
+    for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(signum, handle_exit_signal)
 
     client_thread = threading.Thread(target=forward_client_to_server, args=(enabled,), daemon=True)
     server_thread = threading.Thread(target=forward_server_to_client, daemon=True)
@@ -146,11 +165,12 @@ def main() -> int:
         return_code = proc.wait()
     finally:
         if proc.poll() is None:
-            proc.terminate()
+            signal_agent_group(signal.SIGTERM)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                signal_agent_group(signal.SIGKILL)
+                proc.wait()
         client_thread.join(timeout=2)
         server_thread.join(timeout=5)
     return return_code

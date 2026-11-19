@@ -197,7 +197,8 @@ LICENSE                    MIT License
 - 命令行安装器运行阶段不需要网络、sudo 或第三方依赖；通过 GitHub 安装插件时，DSH 需要下载仓库。
 - DSH 插件激活时会执行仓库内的 `scripts/install.sh`，只写入本文列出的 DSH ACP 和 Xcode 配置位置。
 - 脚本不会读取、收集或上传凭证文件。
-- 代理仅在内存中转发 ACP JSON-RPC、读取 Xcode MCP 启用状态并注入会话声明，不记录提示词，也不修改授权。
+- 代理仅在内存中转发 ACP JSON-RPC、读取 Xcode MCP 启用状态并注入会话声明，不记录提示词，也不修改授权；收到退出信号时只终止并回收自己创建的进程组。
+- 通用 Xcode MCP 调用与设备工作流会对结果和错误中的设备会话密钥脱敏。
 - 测试脚本只在本地通过 ACP 与 DeepSeek Harness 通信；模型请求由用户自己的配置处理。
 - `xcode_mcp.py` 通过本地 `xcrun mcpbridge` 调用 Xcode；文档搜索、崩溃和性能工具可能按用户请求访问 Apple 服务。
 - 本工具不会自动操作模拟器或修改项目；这些行为只发生在你明确交给 Agent 的任务或显式执行的命令中。
