@@ -4,11 +4,15 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_LAUNCHER="$ROOT/bin/dsh-acp-launcher.sh"
 SOURCE_PROXY="$ROOT/bin/dsh_acp_proxy.py"
+SOURCE_ROUTER="$ROOT/bin/xcode_mcp_server.py"
+SOURCE_STDIO="$ROOT/lib/mcp_stdio.py"
 APP_ROOT="${DSH_APP_ROOT:-/Applications/DeepSeek Harness.app/Contents}"
 BIN_DIR="$HOME/Library/Developer/Xcode/CodingAssistant/Bin"
 ACP_DIR="$HOME/Library/Developer/Xcode/CodingAssistant/ACP"
 INSTALLED_LAUNCHER="$BIN_DIR/dsh-acp-launcher.sh"
 INSTALLED_PROXY="$BIN_DIR/dsh_acp_proxy.py"
+INSTALLED_ROUTER="$BIN_DIR/xcode_mcp_server.py"
+INSTALLED_STDIO="$BIN_DIR/mcp_stdio.py"
 AGENT_PLIST="$ACP_DIR/D5EAC000-0000-4000-8000-000000000001.plist"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -35,7 +39,7 @@ printf 'Initializing the DSH ACP profile...\n'
 
 mkdir -p "$BIN_DIR" "$ACP_DIR"
 
-python3 - "$SOURCE_LAUNCHER" "$SOURCE_PROXY" "$INSTALLED_LAUNCHER" "$INSTALLED_PROXY" "$AGENT_PLIST" "$APP_ROOT" "$PYTHON_BIN" <<'PY'
+python3 - "$SOURCE_LAUNCHER" "$SOURCE_PROXY" "$INSTALLED_LAUNCHER" "$INSTALLED_PROXY" "$AGENT_PLIST" "$APP_ROOT" "$PYTHON_BIN" "$SOURCE_ROUTER" "$SOURCE_STDIO" "$INSTALLED_ROUTER" "$INSTALLED_STDIO" <<'PY'
 import os
 from pathlib import Path
 import plistlib
@@ -51,6 +55,10 @@ installed_proxy = Path(sys.argv[4])
 plist_path = Path(sys.argv[5])
 app_root = sys.argv[6]
 python_bin = sys.argv[7]
+source_router = Path(sys.argv[8])
+source_stdio = Path(sys.argv[9])
+installed_router = Path(sys.argv[10])
+installed_stdio = Path(sys.argv[11])
 
 
 def atomic_write(path: Path, data: bytes, mode: int) -> None:
@@ -77,6 +85,8 @@ def atomic_write(path: Path, data: bytes, mode: int) -> None:
 
 atomic_write(installed_launcher, source_launcher.read_bytes(), 0o755)
 atomic_write(installed_proxy, source_proxy.read_bytes(), 0o755)
+atomic_write(installed_router, source_router.read_bytes(), 0o755)
+atomic_write(installed_stdio, source_stdio.read_bytes(), 0o644)
 payload = {
     "agent": "/bin/bash",
     "arguments": [str(installed_launcher)],

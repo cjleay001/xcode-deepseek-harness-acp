@@ -8,8 +8,8 @@
       config:
         serverName: xcode
         transport: stdio
-        command: /usr/bin/xcrun
-        args: ['mcpbridge']
+        command: /bin/bash
+        args: ['-lc', '"${DSH_ACP_PYTHON:-python3}" "$HOME/Library/Developer/Xcode/CodingAssistant/Bin/xcode_mcp_server.py"']
         startupTimeoutMs: 15000
         toolCallTimeoutMs: 300000
         failOnStartupError: false

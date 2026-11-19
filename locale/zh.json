@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Xcode ACP 集成",
-    "description": "把 DeepSeek Harness 注册为 Xcode ACP Agent。安装并启用插件后，重启 Xcode，并在 Settings > Intelligence 中选择 DeepSeek Harness。启用时会初始化 ~/.dsh/profiles/acp，并在 ~/Library/Developer/Xcode/CodingAssistant 下写入启动器和注册文件；替换不同内容前会保留备份。插件还会在 DSH 中注册 xcrun mcpbridge 暴露的全部工具，包括项目、构建、测试、调试、预览、设备、文档和诊断工具。Xcode MCP 已启用时，stdio 代理会向新建和恢复的 ACP 会话注入同一桥接；请仅授权此 Agent 和所需工作区，或设置 DSH_XCODE_MCP=0 使用命令行回退。代理不会修改权限或记录提示词。插件不会读取或修改模型凭证，也不会自动重启 Xcode。禁用或移除插件不会删除已经写入 Xcode 的外部注册，因此 Agent 仍可能在 Xcode 中可用。"
+    "description": "把 DeepSeek Harness 注册为 Xcode ACP Agent。安装并启用插件后，重启 Xcode，并在 Settings > Intelligence 中选择 DeepSeek Harness。启用时会初始化 ~/.dsh/profiles/acp，并在 ~/Library/Developer/Xcode/CodingAssistant 下写入启动器和注册文件；替换不同内容前会保留备份。插件会在 DSH 中注册 deferred Xcode MCP 适配器：默认只提供核心工具和 xcode_tool_search，按任务增量加载项目、构建、测试、调试、预览、设备、文档和诊断工具。Xcode MCP 已启用时，stdio 代理会向新建和恢复的 ACP 会话注入同一桥接；请仅授权此 Agent 和所需工作区，或设置 DSH_XCODE_MCP=0 使用命令行回退。代理不会修改权限或记录提示词。插件不会读取或修改模型凭证，也不会自动重启 Xcode。禁用或移除插件不会删除已经写入 Xcode 的外部注册，因此 Agent 仍可能在 Xcode 中可用。"
   }
 }

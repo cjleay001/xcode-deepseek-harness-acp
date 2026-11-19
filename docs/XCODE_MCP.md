@@ -1,49 +1,70 @@
-# Xcode MCP 完整能力与调用方法
+# Xcode MCP 完整能力与 deferred 调用说明
 
-本工具通过 Apple 自带的 `xcrun mcpbridge` 接入 Xcode。当前在 **Xcode 27.1** 上发现并接入了 **54 个工具**。清单由 Xcode 动态返回，其他版本可能增减；本工具不按硬编码清单过滤功能。
+本工具通过 Apple 自带的 `xcrun mcpbridge` 获取 Xcode 能力。当前在 **Xcode 27.1** 上可发现并接入 **54 个工具**，但不会把它们默认全部展开到模型上下文。
 
-## 三种使用方式
+## 1. deferred 架构
 
-1. **DSH 插件会话**：启用 **Xcode ACP 集成** 后，DSH 通过 `@deepseek-ai/dsh-mcp-client` 注册 `mcp__xcode__*` 工具。新会话可直接要求 Agent 使用这些工具。
-2. **Xcode ACP Agent**：启动器中的代理在 `session/new` 和 `session/resume` 时按需注入 `xcrun mcpbridge`，使 Xcode 中的 DeepSeek Harness Agent 获得同一组工具。
-3. **独立命令行**：`scripts/xcode_mcp.py` 可发现、查看 schema 并调用任意 MCP 工具，不要求模型参与。
-
-外部 `npx xcodebuildmcp` 不是 Apple 的 `mcpbridge`，不属于本工具的默认依赖。
-
-## 命令行速查
-
-```bash
-# 列出当前 Xcode 支持的全部工具
-python3 scripts/xcode_mcp.py list
-
-# 输出完整工具定义和 JSON Schema
-python3 scripts/xcode_mcp.py list --json
-python3 scripts/xcode_mcp.py schema DeviceInteractionSynthesize
-
-# 传 workspace identifier；也可直接传项目绝对路径，由客户端自动打开并解析
-python3 scripts/xcode_mcp.py call XcodeListSchemes \
-  --workspace /absolute/path/App.xcodeproj
-
-# 调用任意工具；--args 必须是 JSON 对象
-python3 scripts/xcode_mcp.py call DocumentationSearch \
-  --args '{"query":"UIViewController view lifecycle","frameworks":["UIKit"]}'
-
-# 构建、安装运行、点击、捕获截图/UI 层级/日志，然后自动关闭设备会话
-python3 scripts/xcode_mcp.py device-state \
-  --workspace /absolute/path/App.xcodeproj \
-  --bundle-id com.example.App \
-  --run \
-  --interaction-command "t 200 400"
+```text
+Xcode / DSH Agent
+        │
+        ▼
+xcode_mcp_server.py
+  - 连接 mcpbridge 并发现工具
+  - 默认只公开核心工具和 xcode_tool_search
+  - 按任务搜索 deferred 工具
+  - 通过 notifications/tools/list_changed 增量公开
+        │
+        ▼
+/usr/bin/xcrun mcpbridge
 ```
 
-- `call` 的 `--workspace` 只在工具 schema 支持 `workspaceIdentifier` 时注入。
-- 项目绝对路径会先通过 `XcodeOpenWorkspace` 解析为当前 `workspace-*` 标识，兼容 headless 调用。
-- `call` 与 `device-state` 会在结果和错误中对 `interactionSessionKey` / `interactSessionKey` 脱敏；`device-state` 使用唯一会话名，并在 `finally` 中调用 `DeviceInteractionEndSession`。
-- `device-state` 不加 `--run` 时只捕获当前状态；`NotRun` 是合法结果，不代表桥接失败。
-- `--interaction-command` 可执行点击、滑动、输入等操作；坐标应依据最新 UI 层级，不要只凭截图猜测。
-- 普通工具错误以 JSON 输出并返回退出码 `2`；协议、参数或启动错误返回 `1`。
+- 工具目录由 Xcode 动态提供，其他版本可能增减。
+- `initialize` 的 `protocolVersion` 按客户端请求协商，不硬编码版本。
+- 每个新 MCP 进程从核心集合开始；恢复 ACP 会话后可再次搜索。
+- 新增工具在当前会话内保持，不随消息反复收缩，降低 schema 前缀和 KV Cache 抖动。
 
-## 完整工具目录
+## 2. 首轮核心集合
+
+默认公开以下 10 个 Xcode 工具及 `xcode_tool_search`：
+
+| 工具 | 用途 |
+|---|---|
+| `XcodeOpenWorkspace` | 打开项目并获得工作区标识 |
+| `XcodeListWorkspaces` | 列出打开的工作区 |
+| `XcodeListSchemes` | 查看 Scheme 和活动项 |
+| `XcodeListTargets` | 查看 Target 和产品类型 |
+| `XcodeRead` | 读取项目文件 |
+| `XcodeGrep` | 搜索项目内容 |
+| `XcodeGlob` | 按通配符查找文件 |
+| `BuildProject` | 构建项目并等待结果 |
+| `GetBuildLog` | 获取构建日志 |
+| `GetTargetBuildSettings` | 读取 Target 构建设置 |
+| `xcode_tool_search` | 按任务搜索并挂载 deferred 工具 |
+
+DSH 自带的文件、shell 和其他工具不因 deferred 而被删除。
+
+## 3. 按任务搜索
+
+`xcode_tool_search` 接受：
+
+```json
+{
+  "query": "simulator screenshot and UI interaction",
+  "limit": 6
+}
+```
+
+执行后：
+
+1. 按工具名、描述和任务关键词评分；
+2. 返回最相关的最多 6 个工具的完整 schema；
+3. 将这些工具加入可见集合；
+4. 发送 `notifications/tools/list_changed`，使 DSH 后续步骤可以实际调用；
+5. 返回 `added` 和 `visibleXcodeToolCount`。
+
+高风险配置、删除、签名、本地化、崩溃和性能工具，只有查询中明确表达对应意图才返回。无匹配结果不会伪造成功。
+
+## 4. 完整工具目录
 
 ### 工作区、Scheme、Target 与项目创建（13）
 
@@ -59,7 +80,7 @@ python3 scripts/xcode_mcp.py device-state \
 | `XcodeListTargets` | 列出 Target、产品类型及测试角色 |
 | `GetTargetBuildSettings` | 读取 Target 构建设置 |
 | `UpdateTargetBuildSetting` | 修改、追加或删除 Target 构建设置 |
-| `XcodeListTemplates` | 查询 Xcode 项目和 Target 模板及选项 |
+| `XcodeListTemplates` | 查询项目和 Target 模板及选项 |
 | `XcodeNewProject` | 从模板创建新项目 |
 | `XcodeNewTarget` | 从模板添加新 Target |
 
@@ -71,16 +92,16 @@ python3 scripts/xcode_mcp.py device-state \
 | `XcodeGlob` | 按通配符查找项目文件 |
 | `XcodeGrep` | 用正则搜索项目内容 |
 | `XcodeRead` | 读取项目文件 |
-| `XcodeWrite` | 创建或覆盖项目文件并加入项目结构 |
+| `XcodeWrite` | 创建或覆盖文件并加入项目结构 |
 | `XcodeUpdate` | 替换项目文件中的文本 |
-| `XcodeMV` | 移动或重命名项目文件、目录 |
+| `XcodeMV` | 移动或重命名文件、目录 |
 | `XcodeMakeDir` | 创建目录和项目分组 |
 | `XcodeRM` | 移除项目文件，可选删除磁盘文件 |
 | `GetFileCompilerFlags` | 读取单文件编译参数 |
 | `UpdateFileCompilerFlags` | 修改、追加或删除单文件编译参数 |
 | `AddInfoPlist` | 添加或修改 Target 的 Info.plist 项 |
 | `AddEntitlement` | 添加必要的代码签名 Entitlement |
-| `XcodeRefreshCodeIssuesInFile` | 获取文件的编译诊断；需要 Xcode 提供对应诊断服务 |
+| `XcodeRefreshCodeIssuesInFile` | 获取文件编译诊断，需要对应诊断服务 |
 
 ### 构建、运行、调试与 Preview（7）
 
@@ -92,22 +113,32 @@ python3 scripts/xcode_mcp.py device-state \
 | `StopProject` | 停止当前运行的 App |
 | `InvokeDebuggerCommand` | 向活动 LLDB 会话发送 `bt`、`po`、`continue` 等命令 |
 | `RunCodeSnippet` | 在指定 Swift 文件上下文中编译运行代码片段 |
-| `RenderPreview` | 构建并渲染 SwiftUI Preview，返回快照及可用变体 |
+| `RenderPreview` | 构建并渲染 SwiftUI Preview，返回快照和变体 |
 
-`RunProject(attachDebugger=true)` 返回后，LLDB 可能仍在异步附加；若立即收到 `No active debug session`，请稍等再查询，不要误报为桥接失败。
+`RunProject(attachDebugger=true)` 返回后，LLDB 可能仍在异步附加。若立即收到 `No active debug session`，应稍等再查询，不要误判为桥接失败。
 
 ### 模拟器、真机交互与控制台（6）
 
 | 工具 | 用途 |
 |---|---|
-| `DeviceInteractionStartSession` | 无工作区的设备会话，用于运行时交互 |
+| `DeviceInteractionStartSession` | 无工作区的设备会话 |
 | `DeviceInteractionStartWorkspaceSession` | 绑定工作区的设备会话，可构建、安装、运行 |
 | `DeviceInteractionInstallAndRun` | 构建、安装并启动当前 App |
 | `DeviceInteractionSynthesize` | 点击、滑动、输入、硬件按钮、旋转，并捕获截图、UI 层级和日志 |
 | `DeviceInteractionEndSession` | 关闭设备会话，释放资源 |
 | `GetConsoleOutput` | 获取 stdout、stderr 和 OSLog，支持过滤和上下文 |
 
-推荐运行顺序：`XcodeOpenWorkspace（如需要） → XcodeListRunDestinations → BuildProject → DeviceInteractionStartWorkspaceSession → DeviceInteractionInstallAndRun → DeviceInteractionSynthesize/GetConsoleOutput → DeviceInteractionEndSession`。
+推荐顺序：
+
+```text
+XcodeOpenWorkspace（如需要）
+→ XcodeListRunDestinations
+→ BuildProject
+→ DeviceInteractionStartWorkspaceSession
+→ DeviceInteractionInstallAndRun
+→ DeviceInteractionSynthesize / GetConsoleOutput
+→ DeviceInteractionEndSession
+```
 
 ### 测试与 Test Plan（5）
 
@@ -119,7 +150,7 @@ python3 scripts/xcode_mcp.py device-state \
 | `RunAllTests` | 运行活动 Test Plan 的全部测试 |
 | `RunSomeTests` | 按 Target 和 Test Identifier 运行指定测试 |
 
-项目没有测试 Target 或活动 Test Plan 时，相关工具可能返回“没有测试”，这不表示 MCP 连接失败。
+没有测试 Target 或活动 Test Plan 时，工具可能返回“没有测试”，不代表 MCP 连接失败。
 
 ### Apple 文档与本地化（5）
 
@@ -131,7 +162,7 @@ python3 scripts/xcode_mcp.py device-state \
 | `StringCatalogRead` | 按翻译状态读取 String Catalog 键 |
 | `StringCatalogEdit` | 写入翻译、变体和复数形式 |
 
-本地化工具具有工具描述中的前置要求：在 Agent 中使用时，应先加载对应的 `xcode-integration:translation-coordinator` 或 `xcode-integration:translation` 指令；本仓库不伪造这些技能。
+在 Agent 中使用本地化工具时，应遵循工具描述中的前置要求，先加载对应的 `xcode-integration:translation-coordinator` 或 `xcode-integration:translation` 指令；本仓库不伪造这些技能。
 
 ### 崩溃与性能诊断（4）
 
@@ -142,14 +173,50 @@ python3 scripts/xcode_mcp.py device-state \
 | `GetTopFieldPerformanceIssues` | 查询启动、卡顿、磁盘写入、能耗等现场性能问题 |
 | `GetFieldPerformanceIssueLogs` | 获取指定性能问题的详细日志和分析 |
 
-这些工具依赖 App 的 Bundle ID、版本、平台、Apple 报表权限和可用数据。无权限或无数据时的错误会原样返回。
+这些工具依赖 App 的 Bundle ID、版本、平台、Apple 报表权限和可用数据。无权限或无数据时会返回明确错误。
 
-## 安全边界
+## 5. 通用命令行
 
-- 不自动启用 Xcode MCP，不执行 sudo，不设置“允许所有 Agent”。
-- 首次使用只授权 `dsh-mcp-client / DeepSeek Harness` 与必要工作区。
-- `XcodeWrite`、`XcodeUpdate`、`XcodeMV`、`XcodeRM`、`XcodeNewProject`、`XcodeNewTarget` 及配置修改工具会改变项目；调用前应明确目标并备份。
-- 崩溃、性能和文档工具可能访问 Apple 服务；只发送完成任务所需的查询和标识。
-- 通用调用和设备工作流不记录提示词，并对输出及错误中的设备会话密钥脱敏。
-- ACP 代理处理 SIGTERM、SIGHUP、SIGINT，终止并回收自己创建的独立进程组，不触碰 XcodeService 或其他用户进程。
-- 禁用 ACP 注入：设置 `DSH_XCODE_MCP=0`。禁用 DSH 插件会话工具：在插件设置中关闭 **Xcode ACP 集成**，或在启动 DSH 前设置 `DSH_XCODE_MCP=0`。
+```bash
+python3 scripts/xcode_mcp.py list
+python3 scripts/xcode_mcp.py list --json
+python3 scripts/xcode_mcp.py schema DeviceInteractionSynthesize
+
+python3 scripts/xcode_mcp.py call XcodeListSchemes \
+  --workspace /absolute/path/App.xcodeproj
+
+python3 scripts/xcode_mcp.py call DocumentationSearch \
+  --args '{"query":"UIViewController view lifecycle","frameworks":["UIKit"]}'
+
+python3 scripts/xcode_mcp.py device-state \
+  --workspace /absolute/path/App.xcodeproj \
+  --bundle-id com.example.App \
+  --run \
+  --interaction-command "t 200 400"
+```
+
+- `call --workspace` 只在工具 schema 支持 `workspaceIdentifier` 时注入。
+- 项目绝对路径会先通过 `XcodeOpenWorkspace` 解析为当前 `workspace-*` 标识。
+- `device-state` 使用唯一会话名，并在 `finally` 中调用 `DeviceInteractionEndSession`。
+- 不加 `--run` 时只捕获当前状态，`NotRun` 是合法结果，不代表桥接失败。
+- 普通工具错误以 JSON 输出并返回退出码 `2`；协议、参数或启动错误返回 `1`。
+
+## 6. 性能与隐私边界
+
+- deferred 只减少模型工具 schema 和无效调用，**不减少 Agent 实际读取源码的网络暴露**。云端模型仍会处理任务所需的代码、日志和工具结果。
+- 首次 MCP 连接和工具发现仍需执行，节省的是后续模型请求中的工具描述和部分推理开销。
+- 本地 DSH 会话、附件、构建日志和 Xcode 日志可能包含代码与敏感信息，关闭会话不等于删除。
+- 凭证只能存 DSH 凭证服务，不写入仓库、Xcode Environment 或文档。
+- 设备会话 key 是工具链必需的临时凭据，模型在 Start/Synthesize/End 等连续调用中使用；不得把它写入公开文档或提交到仓库。
+- 不自动启用 Xcode MCP，不执行 sudo，不设置“允许所有 Agent”。首次只授权当前 Agent 和必要工作区。
+- `XcodeWrite`、`XcodeUpdate`、`XcodeMV`、`XcodeRM`、`XcodeNewProject`、`XcodeNewTarget` 及配置修改工具会改变项目，调用前应明确目标并备份。
+- 崩溃、性能和文档工具可能访问 Apple 服务，只发送完成任务所需的查询和标识。
+- ACP 代理只创建并清理自己的进程组，不触碰 XcodeService 或其他用户进程。
+
+## 7. 已验证行为
+
+- 初始只暴露核心工具与 `xcode_tool_search`；
+- 搜索模拟器任务后通过 `notifications/tools/list_changed` 增量挂载设备工具；
+- 新增加的工具可实际完成设备会话启动、点击、截图/UI 层级读取和关闭；
+- 项目读取、文档搜索、构建设置、编译参数、构建日志、控制台和测试计划均可调用；
+- 标准 ACP 握手、最小模型响应、恢复会话、异常退出和进程组清理均有回归覆盖。

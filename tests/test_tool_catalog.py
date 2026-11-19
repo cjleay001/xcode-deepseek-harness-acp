@@ -28,5 +28,10 @@ missing = sorted(EXPECTED - documented)
 assert not missing, f"Tools missing from documentation: {missing}"
 manifest = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
 assert "scripts/xcode_mcp.py" in manifest["files"]
+assert "bin/xcode_mcp_server.py" in manifest["files"]
+assert "lib/mcp_stdio.py" in manifest["files"]
 assert "docs/XCODE_MCP.md" in manifest["files"]
-print("All 54 discovered Xcode MCP tools are documented and packaged")
+assert "xcode_tool_search" in text
+assert "notifications/tools/list_changed" in text
+assert "lib/tool-router.js" not in manifest["files"]
+print("All 54 discovered Xcode MCP tools and deferred adapter files are documented and packaged")

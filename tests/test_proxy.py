@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -124,8 +125,9 @@ def main() -> None:
     ], "1")
     assert responses[0]["result"]["agentInfo"]["name"] == "fake"
     injected = responses[1]["result"]["mcpServers"]
-    assert len(injected) == 1 and injected[0]["command"] == "/usr/bin/xcrun"
-    assert injected[0]["args"] == ["mcpbridge"] and injected[0]["env"] == []
+    assert len(injected) == 1 and injected[0]["command"] == (os.environ.get("DSH_ACP_PYTHON") or shutil.which("python3") or "/usr/bin/python3")
+    assert len(injected[0]["args"]) == 1 and injected[0]["args"][0].endswith("xcode_mcp_server.py")
+    assert injected[0]["env"] == []
     existing = responses[2]["result"]["mcpServers"]
     assert len(existing) == 1 and existing[0]["command"] == "/custom/xcode"
     resumed = responses[3]["result"]["mcpServers"]

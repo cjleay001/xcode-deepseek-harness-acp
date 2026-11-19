@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -13,8 +14,8 @@ import threading
 
 XCODE_MCP_SERVER = {
     "name": "xcode",
-    "command": "/usr/bin/xcrun",
-    "args": ["mcpbridge"],
+    "command": os.environ.get("DSH_ACP_PYTHON") or shutil.which("python3") or "/usr/bin/python3",
+    "args": [os.path.join(os.path.dirname(__file__), "xcode_mcp_server.py")],
     "env": [],
 }
 SESSION_METHODS = {"session/new", "session/resume"}

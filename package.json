@@ -1,6 +1,6 @@
 {
   "name": "xcode-deepseek-harness-acp",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "private": true,
   "description": "One-click Xcode ACP integration for DeepSeek Harness",
   "type": "module",
@@ -11,6 +11,8 @@
   },
   "files": [
     "index.js",
+    "lib/mcp_stdio.py",
+    "bin/xcode_mcp_server.py",
     "cordis.patch.yml",
     "bin/dsh-acp-launcher.sh",
     "bin/dsh_acp_proxy.py",
